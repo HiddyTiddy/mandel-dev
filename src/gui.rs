@@ -80,6 +80,8 @@ impl App {
                 *texture = Some(buffer);
             });
             ui.label("loading...");
+            ui.label("this may take a while");
+            ui.spinner();
         }
     }
 }
