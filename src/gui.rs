@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use eframe::{
     egui::{self, style::Margin, Frame, Ui},
@@ -60,13 +60,18 @@ impl App {
         let texture = self.texture.lock();
 
         if let Some(texture) = &*texture {
-            ui.label("got some");
+            ui.add(egui::Slider::new(&mut self.scale, 0.1..=10.0).text("scale"));
+            ui.label(format!("using scale {}", self.scale));
+            if self.scale != 1.0 {
+                ui.label("scale isnt implemented yet… oopsies");
+            }
             Frame::none()
                 .fill(Color32::from_rgb(0, 100, 200))
                 .inner_margin(Margin::same(10.0))
                 .show(ui, |ui| {
                     ui.add(egui::Image::new(texture, texture.size_vec2()));
                 });
+            std::thread::sleep(Duration::from_millis(500))
         } else {
             let texture = Arc::clone(&self.texture);
             let ctx = ui.ctx().clone(); // cheap according to docs
@@ -79,7 +84,7 @@ impl App {
                 let mut texture = texture.lock();
                 *texture = Some(buffer);
             });
-            ui.label("loading...");
+            ui.heading("loading...");
             ui.label("this may take a while");
             ui.spinner();
         }
@@ -89,8 +94,6 @@ impl App {
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.add(egui::Slider::new(&mut self.scale, 0.1..=10.0).text("scale"));
-            ui.label(format!("using scale {}", self.scale));
             self.ui_content(ui);
         });
     }
