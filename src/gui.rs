@@ -1,7 +1,4 @@
-use std::{
-    sync::{atomic::AtomicBool, Arc},
-    time::Duration,
-};
+use std::sync::{atomic::AtomicBool, Arc};
 
 use eframe::{
     egui::{self, style::Margin, Frame, Ui},
@@ -26,8 +23,8 @@ pub fn gui() {
 struct App {
     scale: f64,
     // texture: AtomicCell<Option<egui::TextureHandle>>,
-    texture: Arc<Mutex<Option<egui::TextureHandle>>>,
-    calculating: AtomicBool,
+    texture: Arc<Mutex<Option<(f64, egui::TextureHandle)>>>,
+    calculating: Arc<AtomicBool>,
 }
 
 // this function has to change for there to be
@@ -35,16 +32,16 @@ struct App {
 // for this the image has to be repainted
 fn to_coordinate(x: usize, y: usize, scale: f64) -> Complex<f64> {
     Complex::new(
-        (((x as isize) - (WIDTH / 2) as isize) as f64) / (WIDTH as f64 / 4.0) * scale - 1.0,
-        (((y as isize) - (HEIGHT / 2) as isize) as f64) / (HEIGHT as f64 / 3.0) * scale,
+        (((x as isize) - (WIDTH / 2) as isize) as f64) / (WIDTH as f64 / 4.0) / scale - 1.0,
+        (((y as isize) - (HEIGHT / 2) as isize) as f64) / (HEIGHT as f64 / 3.0) / scale,
     )
 }
 
-fn make_buffer() -> Vec<u8> {
+fn make_buffer(scale: f64) -> Vec<u8> {
     let mandelbroter = Mandelbrot;
     (0..WIDTH * HEIGHT)
         .into_par_iter()
-        .map(|i| to_coordinate(i % WIDTH, i / WIDTH, 1.0))
+        .map(|i| to_coordinate(i % WIDTH, i / WIDTH, scale))
         .flat_map(|coordinate| {
             let pixel = mandelbroter.color_at(coordinate);
             pixel.to_rgba()
@@ -57,44 +54,69 @@ impl App {
         Self {
             scale: 1.0,
             texture: Arc::new(Mutex::new(None)),
-            calculating: AtomicBool::new(false),
+            calculating: Arc::new(AtomicBool::new(false)),
         }
     }
 
     // caching in rust = <3
     fn ui_content(&mut self, ui: &mut Ui) {
+        fn make_texture(
+            calculating: Arc<AtomicBool>,
+            texture: Arc<Mutex<Option<(f64, eframe::epaint::TextureHandle)>>>,
+
+            ctx: egui::Context,
+            scale: f64,
+        ) {
+            println!("calculating for {scale}");
+            std::thread::spawn(move || {
+                let buffer = make_buffer(scale);
+                let buffer = ctx.load_texture(
+                    "mandelbrot",
+                    ColorImage::from_rgba_unmultiplied([WIDTH, HEIGHT], &buffer),
+                );
+                let mut texture = texture.lock();
+                *texture = Some((scale, buffer));
+                calculating.store(false, std::sync::atomic::Ordering::SeqCst);
+            });
+        }
+
         let texture = self.texture.lock();
 
-        if let Some(texture) = &*texture {
+        if let Some((scale, texture)) = &*texture {
             ui.add(egui::Slider::new(&mut self.scale, 0.1..=10.0).text("scale"));
             ui.label(format!("using scale {}", self.scale));
-            if self.scale != 1.0 {
-                ui.label("scale isnt implemented yet… oopsies");
+
+            if (*scale - self.scale).abs() > 0.05 {
+                let calculating = self.calculating.load(std::sync::atomic::Ordering::SeqCst);
+                if !calculating {
+                    self.calculating
+                        .store(true, std::sync::atomic::Ordering::SeqCst);
+
+                    let texture = Arc::clone(&self.texture);
+                    let ctx = ui.ctx().clone(); // cheap according to docs
+                    let scale = self.scale;
+
+                    make_texture(Arc::clone(&self.calculating), texture, ctx, scale);
+                }
             }
+
             Frame::none()
                 .fill(Color32::from_rgb(0, 100, 200))
                 .inner_margin(Margin::same(10.0))
                 .show(ui, |ui| {
                     ui.add(egui::Image::new(texture, texture.size_vec2()));
                 });
-            std::thread::sleep(Duration::from_millis(500))
         } else {
             let calculating = self.calculating.load(std::sync::atomic::Ordering::SeqCst);
             if !calculating {
-                self.calculating.store(true, std::sync::atomic::Ordering::SeqCst);
+                self.calculating
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
 
                 let texture = Arc::clone(&self.texture);
                 let ctx = ui.ctx().clone(); // cheap according to docs
+                let scale = self.scale;
 
-                std::thread::spawn(move || {
-                    let buffer = make_buffer();
-                    let buffer = ctx.load_texture(
-                        "mandelbrot",
-                        ColorImage::from_rgba_unmultiplied([WIDTH, HEIGHT], &buffer),
-                    );
-                    let mut texture = texture.lock();
-                    *texture = Some(buffer);
-                });
+                make_texture(Arc::clone(&self.calculating), texture, ctx, scale);
             }
             ui.heading("loading...");
             ui.label("this may take a while");
